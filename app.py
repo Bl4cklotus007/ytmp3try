@@ -30,7 +30,12 @@ if not os.path.exists('downloads'):
     os.makedirs('downloads')
 
 def is_valid_youtube_url(url):
-    return 'youtube.com/watch?v=' in url or 'youtu.be/' in url
+    youtube_regex = (
+        r'(https?://)?(www\.)?'
+        '(youtube|youtu|youtube-nocookie)\.(com|be)/'
+        '(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
+    youtube_regex_match = re.match(youtube_regex, url)
+    return bool(youtube_regex_match)
 
 def download_and_convert(url, format_type=None, format_id=None):
     """Function for downloading and converting to MP3"""
