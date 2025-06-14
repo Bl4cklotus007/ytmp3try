@@ -2,5 +2,4 @@ Flask==2.3.3
 Flask-Cors==4.0.0
 python-dotenv==1.0.0
 yt-dlp==2023.11.16
-Werkzeug==2.3.7
-gunicorn==21.2.0 
+Werkzeug==2.3.7 
