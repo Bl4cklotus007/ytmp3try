@@ -1,10 +1,13 @@
 [build]
 builder = "nixpacks"
-buildCommand = "pip install -r requirements.txt && apt-get update && apt-get install -y ffmpeg"
+buildCommand = "pip install -r requirements.txt"
 
 [deploy]
 startCommand = "gunicorn app:app"
 healthcheckPath = "/"
 healthcheckTimeout = 100
 restartPolicyType = "on-failure"
-restartPolicyMaxRetries = 10 
+restartPolicyMaxRetries = 10
+
+[phases.setup]
+nixPkgs = ["ffmpeg"] 
