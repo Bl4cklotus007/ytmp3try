@@ -37,82 +37,45 @@ YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)([a-zA-
 def is_valid_youtube_url(url):
     return bool(re.match(YOUTUBE_REGEX, url))
 
-def download_and_convert(url, format_type=None, format_id=None):
-    """Function for downloading and converting to MP3"""
-    try:
-        # Create a temporary directory
-        temp_dir = tempfile.mkdtemp()
-        output_path = os.path.join(temp_dir, '%(title)s.%(ext)s')
-
-        # Configure yt-dlp options with enhanced network settings
-        ydl_opts = {
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': 'mp3',
-                'preferredquality': '192',
-            }],
-            'outtmpl': output_path,
-            'quiet': True,
-            'no_warnings': True,
-            # Network settings
-            'noproxy': '*',
-            'retries': 5,
-            'socket_timeout': 60,
-            'extractor_retries': 5,
-            'ignoreerrors': True,
-            'no_check_certificate': True,
-            # Custom headers
-            'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                'Accept-Language': 'en-us,en;q=0.5',
-                'Sec-Fetch-Mode': 'navigate',
-            },
-            # Additional options
-            'geo_bypass': True,
-            'geo_verification_proxy': None,
-            'source_address': '0.0.0.0',
-        }
-
-        try:
-            # Download and convert using yt-dlp Python API
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                logger.info(f"Attempting to download video from URL: {url}")
-                info = ydl.extract_info(url, download=True)
-                if info is None:
-                    raise Exception("Failed to extract video information")
-                video_title = info.get('title', 'video')
-                # Get the actual output file path
-                output_file = os.path.join(temp_dir, f"{video_title}.mp3")
-
-            if not os.path.exists(output_file):
-                logger.error("Output file not found after download")
-                return jsonify({'error': 'Failed to download video'}), 500
-
-            logger.info(f"Successfully downloaded and converted video: {video_title}")
-            # Send the file
-            return send_file(
-                output_file,
-                as_attachment=True,
-                download_name=f"{video_title}.mp3",
-                mimetype='audio/mpeg'
-            )
-
-        except yt_dlp.utils.DownloadError as e:
-            logger.error(f"Download error: {str(e)}")
-            return jsonify({'error': f'Error downloading video: {str(e)}'}), 500
-        except Exception as e:
-            logger.error(f"Unexpected error: {str(e)}")
-            return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
-
-    except Exception as e:
-        logger.error(f"Request processing error: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        # Clean up temporary directory
-        if 'temp_dir' in locals():
-            shutil.rmtree(temp_dir, ignore_errors=True)
+def get_yt_dlp_opts(output_path):
+    """Get yt-dlp options with robust configuration"""
+    return {
+        'format': 'bestaudio/best',
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
+        # Network settings
+        'noproxy': '*',
+        'retries': 10,
+        'socket_timeout': 60,
+        'extractor_retries': 10,
+        'ignoreerrors': True,
+        'no_check_certificate': True,
+        # Custom headers
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        },
+        # Additional options
+        'geo_bypass': True,
+        'geo_verification_proxy': None,
+        'source_address': '0.0.0.0',
+        # Cookie handling
+        'cookiesfrombrowser': ('chrome',),
+        # Extractors
+        'extract_flat': False,
+        'force_generic_extractor': False,
+        # Debug options
+        'verbose': True,
+        'dump_single_json': True,
+    }
 
 @app.route('/')
 def index():
@@ -161,7 +124,7 @@ def get_video_info():
         return jsonify({'error': f'Error server: {str(e)}'}), 500
 
 @app.route('/download', methods=['POST'])
-def download():
+def download_and_convert():
     try:
         data = request.get_json()
         if not data or 'url' not in data:
@@ -171,16 +134,64 @@ def download():
         if not is_valid_youtube_url(url):
             return jsonify({'error': 'Invalid YouTube URL'}), 400
 
-        result = download_and_convert(url)
-        if 'error' in result:
-            return jsonify(result), 400
+        # Create a temporary directory
+        temp_dir = tempfile.mkdtemp()
+        output_path = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-        return jsonify(result)
+        try:
+            # First try to get video info without downloading
+            with yt_dlp.YoutubeDL(get_yt_dlp_opts(output_path)) as ydl:
+                logger.info(f"Attempting to get video info from URL: {url}")
+                try:
+                    # Try to get video info first
+                    info = ydl.extract_info(url, download=False)
+                    if info is None:
+                        raise Exception("Failed to extract video information")
+                    
+                    video_title = info.get('title', 'video')
+                    logger.info(f"Successfully got video info: {video_title}")
+                    
+                    # Now try to download
+                    logger.info("Starting download...")
+                    info = ydl.extract_info(url, download=True)
+                    
+                    # Get the actual output file path
+                    output_file = os.path.join(temp_dir, f"{video_title}.mp3")
+
+                    if not os.path.exists(output_file):
+                        logger.error("Output file not found after download")
+                        return jsonify({'error': 'Failed to download video'}), 500
+
+                    logger.info(f"Successfully downloaded and converted video: {video_title}")
+                    # Send the file
+                    return send_file(
+                        output_file,
+                        as_attachment=True,
+                        download_name=f"{video_title}.mp3",
+                        mimetype='audio/mpeg'
+                    )
+                except yt_dlp.utils.DownloadError as e:
+                    logger.error(f"Download error: {str(e)}")
+                    # Try to get more detailed error information
+                    error_details = {
+                        'error': str(e),
+                        'url': url,
+                        'timestamp': str(datetime.now())
+                    }
+                    logger.error(f"Error details: {json.dumps(error_details)}")
+                    return jsonify({'error': f'Error downloading video: {str(e)}'}), 500
+
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
     except Exception as e:
-        logger.error(f"Server error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Error server: {str(e)}'}), 500
+        logger.error(f"Request processing error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+    finally:
+        # Clean up temporary directory
+        if 'temp_dir' in locals():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 @app.route('/download_file/<filename>')
 def download_file(filename):
