@@ -10,6 +10,7 @@ import traceback
 import yt_dlp
 import tempfile
 from dotenv import load_dotenv
+import shutil
 
 # Load environment variables
 load_dotenv()
@@ -29,53 +30,58 @@ app.secret_key = os.urandom(24)
 if not os.path.exists('downloads'):
     os.makedirs('downloads')
 
+# Regex pattern for validating YouTube URLs
+YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})'
+
 def is_valid_youtube_url(url):
-    youtube_regex = (
-        r'(https?://)?(www\.)?'
-        '(youtube|youtu|youtube-nocookie)\.(com|be)/'
-        '(watch\?v=|embed/|v/|.+\?v=)?([^&=%\?]{11})')
-    youtube_regex_match = re.match(youtube_regex, url)
-    return bool(youtube_regex_match)
+    return bool(re.match(YOUTUBE_REGEX, url))
 
 def download_and_convert(url, format_type=None, format_id=None):
     """Function for downloading and converting to MP3"""
     try:
+        # Create a temporary directory
+        temp_dir = tempfile.mkdtemp()
+        output_path = os.path.join(temp_dir, '%(title)s.%(ext)s')
+
         # Configure yt-dlp options
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
                 'key': 'FFmpegExtractAudio',
                 'preferredcodec': 'mp3',
-                'preferredquality': '320',
+                'preferredquality': '192',
             }],
-            'outtmpl': os.path.join('downloads', '%(title)s.%(ext)s'),
+            'outtmpl': output_path,
             'quiet': True,
-            'no_warnings': True,
+            'no_warnings': True
         }
 
-        # Download and convert
+        # Download and convert using yt-dlp Python API
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
             video_title = info.get('title', 'video')
-            
-            # Clean the title to make it safe for filenames
-            safe_title = re.sub(r'[\\/*?:"<>|]', "", video_title)
-            safe_title = safe_title.replace(' ', '_')
-            # Limit title length to avoid too long filenames
-            safe_title = safe_title[:100]
-            
-            final_path = os.path.join('downloads', f"{safe_title}.mp3")
+            # Get the actual output file path
+            output_file = os.path.join(temp_dir, f"{video_title}.mp3")
 
-            return {
-                'success': True,
-                'filename': os.path.basename(final_path),
-                'title': video_title
-            }
+        if not os.path.exists(output_file):
+            return jsonify({'error': 'Failed to download video'}), 500
+
+        # Send the file
+        return send_file(
+            output_file,
+            as_attachment=True,
+            download_name=f"{video_title}.mp3",
+            mimetype='audio/mpeg'
+        )
 
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
         logger.error(traceback.format_exc())
-        return {'error': f'Error saat download: {str(e)}'}
+        return jsonify({'error': f'Error saat download: {str(e)}'}), 500
+    finally:
+        # Clean up temporary directory
+        if 'temp_dir' in locals():
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 @app.route('/')
 def index():
@@ -126,18 +132,13 @@ def get_video_info():
 @app.route('/download', methods=['POST'])
 def download():
     try:
-        if request.is_json:
-            data = request.json
-        else:
-            data = request.form
+        data = request.get_json()
+        if not data or 'url' not in data:
+            return jsonify({'error': 'No URL provided'}), 400
 
-        url = data.get('url')
-
-        if not url:
-            return jsonify({'error': 'URL tidak boleh kosong'}), 400
-
+        url = data['url']
         if not is_valid_youtube_url(url):
-            return jsonify({'error': 'URL YouTube tidak valid'}), 400
+            return jsonify({'error': 'Invalid YouTube URL'}), 400
 
         result = download_and_convert(url)
         if 'error' in result:
