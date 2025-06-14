@@ -3,3 +3,4 @@ Flask-Cors==4.0.0
 python-dotenv==1.0.0
 yt-dlp==2023.11.16
 Werkzeug==2.3.7
+ffmpeg-python==0.2.0
