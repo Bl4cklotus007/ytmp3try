@@ -43,7 +43,7 @@ def download_and_convert(url, format_type=None, format_id=None):
         temp_dir = tempfile.mkdtemp()
         output_path = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-        # Configure yt-dlp options
+        # Configure yt-dlp options with proxy settings
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -53,31 +53,51 @@ def download_and_convert(url, format_type=None, format_id=None):
             }],
             'outtmpl': output_path,
             'quiet': True,
-            'no_warnings': True
+            'no_warnings': True,
+            # Disable proxy to avoid connection issues
+            'noproxy': '*',
+            # Add retries for better reliability
+            'retries': 3,
+            # Add socket timeout
+            'socket_timeout': 30,
+            # Add user agent
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
         }
 
-        # Download and convert using yt-dlp Python API
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            video_title = info.get('title', 'video')
-            # Get the actual output file path
-            output_file = os.path.join(temp_dir, f"{video_title}.mp3")
+        try:
+            # Download and convert using yt-dlp Python API
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                logger.info(f"Attempting to download video from URL: {url}")
+                info = ydl.extract_info(url, download=True)
+                video_title = info.get('title', 'video')
+                # Get the actual output file path
+                output_file = os.path.join(temp_dir, f"{video_title}.mp3")
 
-        if not os.path.exists(output_file):
-            return jsonify({'error': 'Failed to download video'}), 500
+            if not os.path.exists(output_file):
+                logger.error("Output file not found after download")
+                return jsonify({'error': 'Failed to download video'}), 500
 
-        # Send the file
-        return send_file(
-            output_file,
-            as_attachment=True,
-            download_name=f"{video_title}.mp3",
-            mimetype='audio/mpeg'
-        )
+            logger.info(f"Successfully downloaded and converted video: {video_title}")
+            # Send the file
+            return send_file(
+                output_file,
+                as_attachment=True,
+                download_name=f"{video_title}.mp3",
+                mimetype='audio/mpeg'
+            )
+
+        except yt_dlp.utils.DownloadError as e:
+            logger.error(f"Download error: {str(e)}")
+            return jsonify({'error': f'Error downloading video: {str(e)}'}), 500
+        except Exception as e:
+            logger.error(f"Unexpected error: {str(e)}")
+            return jsonify({'error': f'Unexpected error: {str(e)}'}), 500
 
     except Exception as e:
-        logger.error(f"Download error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Error saat download: {str(e)}'}), 500
+        logger.error(f"Request processing error: {str(e)}")
+        return jsonify({'error': str(e)}), 500
     finally:
         # Clean up temporary directory
         if 'temp_dir' in locals():
