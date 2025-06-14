@@ -1,7 +1,7 @@
-flask==2.2.5
-werkzeug==2.2.3
-flask-cors==3.0.10
-yt-dlp==2023.3.4
-redis==6.2.0
-rq==2.4.0
-python-dotenv==1.1.0 
+Flask==2.3.3
+Flask-Cors==4.0.0
+python-dotenv==1.0.0
+redis==5.0.1
+rq==1.15.1
+yt-dlp==2023.11.16
+Werkzeug==2.3.7 
