@@ -1,8 +1,8 @@
 import sys
 import os
 
-# Add your project directory to the sys.path
-path = '/home/Bl4cklotus007/ytdownloadermp3'
+# Add the project directory to the Python path
+path = '/home/blacklotus/ytmp3try'
 if path not in sys.path:
     sys.path.append(path)
 
@@ -10,5 +10,5 @@ if path not in sys.path:
 os.environ['FLASK_APP'] = 'app.py'
 os.environ['FLASK_ENV'] = 'production'
 
-# Import your Flask app
+# Import the Flask app from app.py
 from app import app as application 
