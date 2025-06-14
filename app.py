@@ -10,8 +10,6 @@ import traceback
 import subprocess
 import tempfile
 from dotenv import load_dotenv
-from rq import Worker, Queue
-from redis import Redis
 
 # Load environment variables
 load_dotenv()
@@ -27,11 +25,9 @@ app = Flask(__name__)
 CORS(app)
 app.secret_key = os.urandom(24)
 
+# Create downloads directory if it doesn't exist
 if not os.path.exists('downloads'):
     os.makedirs('downloads')
-
-redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379')
-redis_conn = Redis.from_url(redis_url)
 
 def is_valid_youtube_url(url):
     youtube_regex = (
@@ -64,8 +60,12 @@ def download_and_convert(url, format_type=None, format_id=None):
         # Limit title length to avoid too long filenames
         safe_title = safe_title[:100]
         
+        # Use temporary directory for downloads
+        temp_dir = tempfile.mkdtemp()
+        temp_m4a = os.path.join(temp_dir, f"{safe_title}.m4a")
+        final_mp3 = os.path.join(temp_dir, f"{safe_title}.mp3")
+        
         # First download as m4a
-        temp_m4a = f"downloads/{safe_title}.m4a"
         ytdlp_cmd = [
             'yt-dlp',
             '-f', 'bestaudio[ext=m4a]/bestaudio/best',
@@ -89,7 +89,6 @@ def download_and_convert(url, format_type=None, format_id=None):
             return {'error': 'Gagal mengunduh audio.'}
 
         # Then convert to mp3 using ffmpeg
-        final_mp3 = f"downloads/{safe_title}.mp3"
         ffmpeg_cmd = [
             'ffmpeg',
             '-i', temp_m4a,
@@ -97,7 +96,7 @@ def download_and_convert(url, format_type=None, format_id=None):
             '-ar', '44100',
             '-ac', '2',
             '-b:a', '320k',
-            '-y',  # Overwrite output file if it exists
+            '-y',
             final_mp3
         ]
 
@@ -109,21 +108,22 @@ def download_and_convert(url, format_type=None, format_id=None):
             logger.error(f"ffmpeg stdout: {result.stdout}")
             return {'error': 'Gagal mengkonversi ke MP3.'}
 
-        # Remove temporary m4a file
+        # Move the final file to downloads directory
+        final_path = os.path.join('downloads', f"{safe_title}.mp3")
+        os.rename(final_mp3, final_path)
+
+        # Clean up temporary files
         try:
             os.remove(temp_m4a)
+            os.rmdir(temp_dir)
         except Exception as e:
-            logger.warning(f"Failed to remove temporary file: {str(e)}")
+            logger.warning(f"Failed to clean up temporary files: {str(e)}")
 
-        # Check if the final mp3 file exists
-        if os.path.exists(final_mp3):
-            return {
-                'success': True,
-                'filename': os.path.basename(final_mp3),
-                'title': video_title
-            }
-        else:
-            return {'error': 'File tidak ditemukan setelah konversi.'}
+        return {
+            'success': True,
+            'filename': os.path.basename(final_path),
+            'title': video_title
+        }
 
     except Exception as e:
         logger.error(f"Download error: {str(e)}")
@@ -132,8 +132,6 @@ def download_and_convert(url, format_type=None, format_id=None):
 
 @app.route('/')
 def index():
-    if 'download_history' not in session:
-        session['download_history'] = []
     return render_template('index.html')
 
 @app.route('/get_video_info', methods=['POST', 'GET'])
@@ -169,26 +167,9 @@ def get_video_info():
                 return jsonify({'error': 'Gagal mengambil info video.'}), 400
 
             info = json.loads(result.stdout)
-            formats = []
-            for f in info.get('formats', []):
-                if f.get('ext') in ['mp4', 'm4a', 'webm']:
-                    formats.append({
-                        'format_id': f.get('format_id'),
-                        'ext': f.get('ext'),
-                        'format_note': f.get('format_note'),
-                        'filesize': f.get('filesize') or f.get('filesize_approx'),
-                        'resolution': f.get('resolution') or f.get('height'),
-                        'abr': f.get('abr'),
-                        'vcodec': f.get('vcodec'),
-                        'acodec': f.get('acodec'),
-                        'fps': f.get('fps'),
-                        'format': f.get('format')
-                    })
-
             return jsonify({
                 'title': info.get('title'),
-                'thumbnail': info.get('thumbnail'),
-                'formats': formats
+                'thumbnail': info.get('thumbnail')
             })
 
         except Exception as e:
@@ -244,22 +225,19 @@ def download():
 @app.route('/download_file/<filename>')
 def download_file(filename):
     try:
-        filepath = os.path.join('downloads', filename)
-        if not os.path.exists(filepath):
-            logger.error(f"File not found: {filepath}")
-            return jsonify({'error': 'File tidak ditemukan'}), 404
-        return send_file(filepath, as_attachment=True)
+        return send_file(
+            os.path.join('downloads', filename),
+            as_attachment=True,
+            download_name=filename
+        )
     except Exception as e:
-        logger.error(f"Error sending file: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': str(e)}), 400
+        logger.error(f"Download file error: {str(e)}")
+        return jsonify({'error': 'File tidak ditemukan'}), 404
 
 @app.route('/get_history')
 def get_history():
     return jsonify(session.get('download_history', []))
 
+# For Vercel deployment
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
-
-    worker = Worker([Queue(connection=redis_conn)], connection=redis_conn)
-    worker.work() 
+    app.run(debug=True) 
