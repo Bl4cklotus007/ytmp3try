@@ -11,6 +11,7 @@ import yt_dlp
 import tempfile
 from dotenv import load_dotenv
 import shutil
+import socket
 
 # Load environment variables
 load_dotenv()
@@ -43,7 +44,7 @@ def download_and_convert(url, format_type=None, format_id=None):
         temp_dir = tempfile.mkdtemp()
         output_path = os.path.join(temp_dir, '%(title)s.%(ext)s')
 
-        # Configure yt-dlp options with proxy settings
+        # Configure yt-dlp options with enhanced network settings
         ydl_opts = {
             'format': 'bestaudio/best',
             'postprocessors': [{
@@ -54,16 +55,24 @@ def download_and_convert(url, format_type=None, format_id=None):
             'outtmpl': output_path,
             'quiet': True,
             'no_warnings': True,
-            # Disable proxy to avoid connection issues
+            # Network settings
             'noproxy': '*',
-            # Add retries for better reliability
-            'retries': 3,
-            # Add socket timeout
-            'socket_timeout': 30,
-            # Add user agent
+            'retries': 5,
+            'socket_timeout': 60,
+            'extractor_retries': 5,
+            'ignoreerrors': True,
+            'no_check_certificate': True,
+            # Custom headers
             'http_headers': {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                'Accept-Language': 'en-us,en;q=0.5',
+                'Sec-Fetch-Mode': 'navigate',
+            },
+            # Additional options
+            'geo_bypass': True,
+            'geo_verification_proxy': None,
+            'source_address': '0.0.0.0',
         }
 
         try:
@@ -71,6 +80,8 @@ def download_and_convert(url, format_type=None, format_id=None):
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
                 logger.info(f"Attempting to download video from URL: {url}")
                 info = ydl.extract_info(url, download=True)
+                if info is None:
+                    raise Exception("Failed to extract video information")
                 video_title = info.get('title', 'video')
                 # Get the actual output file path
                 output_file = os.path.join(temp_dir, f"{video_title}.mp3")
