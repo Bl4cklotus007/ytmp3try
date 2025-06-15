@@ -12,6 +12,7 @@ import tempfile
 from dotenv import load_dotenv
 import shutil
 import socket
+import time
 
 # Load environment variables
 load_dotenv()
@@ -27,15 +28,40 @@ app = Flask(__name__)
 CORS(app)
 app.secret_key = os.urandom(24)
 
-# Create downloads directory if it doesn't exist
-if not os.path.exists('downloads'):
-    os.makedirs('downloads')
-
 # Regex pattern for validating YouTube URLs
 YOUTUBE_REGEX = r'(https?://)?(www\.)?(youtube\.com/watch\?v=|youtu\.be/)([a-zA-Z0-9_-]{11})'
 
+# Global variable to store download progress
+download_progress = {}
+
 def is_valid_youtube_url(url):
     return bool(re.match(YOUTUBE_REGEX, url))
+
+def progress_hook(d):
+    if d['status'] == 'downloading':
+        download_id = d.get('info_dict', {}).get('id', 'unknown')
+        if download_id not in download_progress:
+            download_progress[download_id] = {
+                'start_time': time.time(),
+                'downloaded_bytes': 0,
+                'total_bytes': d.get('total_bytes', 0),
+                'speed': 0,
+                'percentage': 0
+            }
+        
+        current = download_progress[download_id]
+        current['downloaded_bytes'] = d.get('downloaded_bytes', 0)
+        current['speed'] = d.get('speed', 0)
+        current['percentage'] = d.get('_percent_str', '0%')
+        
+        # Calculate elapsed time
+        elapsed = time.time() - current['start_time']
+        current['elapsed'] = f"{int(elapsed)}s"
+        
+    elif d['status'] == 'finished':
+        download_id = d.get('info_dict', {}).get('id', 'unknown')
+        if download_id in download_progress:
+            download_progress[download_id]['status'] = 'finished'
 
 def get_yt_dlp_opts(output_path):
     """Get yt-dlp options with robust configuration"""
@@ -49,6 +75,7 @@ def get_yt_dlp_opts(output_path):
         'outtmpl': output_path,
         'quiet': True,
         'no_warnings': True,
+        'progress_hooks': [progress_hook],
         # Network settings
         'noproxy': '*',
         'retries': 10,
@@ -67,8 +94,6 @@ def get_yt_dlp_opts(output_path):
         'geo_bypass': True,
         'geo_verification_proxy': None,
         'source_address': '0.0.0.0',
-        # Cookie handling
-        'cookiesfrombrowser': ('chrome',),
         # Extractors
         'extract_flat': False,
         'force_generic_extractor': False,
@@ -110,7 +135,8 @@ def get_video_info():
                 info = ydl.extract_info(url, download=False)
                 return jsonify({
                     'title': info.get('title'),
-                    'thumbnail': info.get('thumbnail')
+                    'thumbnail': info.get('thumbnail'),
+                    'id': info.get('id')
                 })
 
         except Exception as e:
@@ -149,6 +175,7 @@ def download_and_convert():
                         raise Exception("Failed to extract video information")
                     
                     video_title = info.get('title', 'video')
+                    video_id = info.get('id', 'unknown')
                     logger.info(f"Successfully got video info: {video_title}")
                     
                     # Now try to download
@@ -163,12 +190,19 @@ def download_and_convert():
                         return jsonify({'error': 'Failed to download video'}), 500
 
                     logger.info(f"Successfully downloaded and converted video: {video_title}")
-                    # Send the file
+                    
+                    # Clean filename for download
+                    safe_filename = "".join([c for c in video_title if c.isalpha() or c.isdigit() or c==' ']).rstrip()
+                    safe_filename = f"{safe_filename}.mp3"
+                    
+                    # Send the file with proper headers for browser download
                     return send_file(
                         output_file,
                         as_attachment=True,
-                        download_name=f"{video_title}.mp3",
-                        mimetype='audio/mpeg'
+                        download_name=safe_filename,
+                        mimetype='audio/mpeg',
+                        max_age=0,
+                        conditional=True
                     )
                 except yt_dlp.utils.DownloadError as e:
                     logger.error(f"Download error: {str(e)}")
@@ -193,37 +227,12 @@ def download_and_convert():
         if 'temp_dir' in locals():
             shutil.rmtree(temp_dir, ignore_errors=True)
 
-@app.route('/download_file/<filename>')
-def download_file(filename):
-    try:
-        return send_file(
-            os.path.join('downloads', filename),
-            as_attachment=True,
-            download_name=filename
-        )
-    except Exception as e:
-        logger.error(f"Download file error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Error saat download file: {str(e)}'}), 500
-
-@app.route('/get_history')
-def get_history():
-    try:
-        history = []
-        for filename in os.listdir('downloads'):
-            if filename.endswith('.mp3'):
-                file_path = os.path.join('downloads', filename)
-                history.append({
-                    'filename': filename,
-                    'title': os.path.splitext(filename)[0].replace('_', ' '),
-                    'size': os.path.getsize(file_path),
-                    'date': datetime.fromtimestamp(os.path.getctime(file_path)).strftime('%Y-%m-%d %H:%M:%S')
-                })
-        return jsonify(history)
-    except Exception as e:
-        logger.error(f"Get history error: {str(e)}")
-        logger.error(traceback.format_exc())
-        return jsonify({'error': f'Error saat mengambil history: {str(e)}'}), 500
+@app.route('/get_progress/<video_id>')
+def get_progress(video_id):
+    """Get download progress for a specific video"""
+    if video_id in download_progress:
+        return jsonify(download_progress[video_id])
+    return jsonify({'error': 'Video ID not found'}), 404
 
 if __name__ == '__main__':
     app.run(debug=True) 

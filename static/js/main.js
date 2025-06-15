@@ -7,12 +7,11 @@ document.addEventListener('DOMContentLoaded', function() {
     const videoTitle = document.getElementById('videoTitle');
     const errorMessage = document.getElementById('errorMessage');
     const loadingSpinner = document.getElementById('loadingSpinner');
-    const historyList = document.getElementById('historyList');
+    const progressBar = document.getElementById('progressBar');
+    const progressText = document.getElementById('progressText');
 
     let currentVideoInfo = null;
-
-    // Load download history
-    loadHistory();
+    let progressInterval = null;
 
     // Get video info when button is clicked
     getInfoBtn.addEventListener('click', getVideoInfo);
@@ -92,11 +91,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
         showLoading();
         hideError();
+        showProgress();
 
         try {
             console.log('Sending download request:', {
-                url: videoUrl.value,
-                format: 'mp3'
+                url: videoUrl.value
             });
 
             const response = await fetch('/download', {
@@ -106,32 +105,28 @@ document.addEventListener('DOMContentLoaded', function() {
                     'Accept': 'application/json'
                 },
                 body: JSON.stringify({
-                    url: videoUrl.value,
-                    format: 'mp3'
+                    url: videoUrl.value
                 })
             });
 
-            console.log('Download response status:', response.status);
-            const data = await response.json();
-            console.log('Download response data:', data);
-
             if (response.ok) {
-                // Trigger file download with the video title
+                // Get the blob from the response
+                const blob = await response.blob();
+                
+                // Create a download link
                 const downloadLink = document.createElement('a');
-                downloadLink.href = `/download_file/${data.filename}`;
-                downloadLink.download = data.title + '.mp3';
+                downloadLink.href = URL.createObjectURL(blob);
+                downloadLink.download = `${currentVideoInfo.title}.mp3`;
                 document.body.appendChild(downloadLink);
                 downloadLink.click();
                 document.body.removeChild(downloadLink);
-                
-                // Reload history
-                loadHistory();
                 
                 // Reset form
                 videoUrl.value = '';
                 videoPreview.classList.add('d-none');
                 currentVideoInfo = null;
             } else {
+                const data = await response.json();
                 showError(data.error || 'Download failed');
             }
         } catch (error) {
@@ -139,31 +134,18 @@ document.addEventListener('DOMContentLoaded', function() {
             showError('Network error. Please try again.');
         } finally {
             hideLoading();
+            hideProgress();
         }
     }
 
-    async function loadHistory() {
-        try {
-            const response = await fetch('/get_history');
-            const history = await response.json();
-            
-            historyList.innerHTML = '';
-            history.reverse().forEach(item => {
-                const listItem = document.createElement('a');
-                listItem.href = `/download_file/${item.filename}`;
-                listItem.className = 'list-group-item list-group-item-action';
-                listItem.innerHTML = `
-                    <div class="d-flex w-100 justify-content-between">
-                        <h5 class="mb-1">${item.title}</h5>
-                        <small>${item.timestamp}</small>
-                    </div>
-                    <p class="mb-1">Format: MP3</p>
-                `;
-                historyList.appendChild(listItem);
-            });
-        } catch (error) {
-            console.error('Failed to load history:', error);
-        }
+    function showProgress() {
+        progressBar.style.width = '0%';
+        progressText.textContent = 'Starting download...';
+        progressBar.parentElement.classList.remove('d-none');
+    }
+
+    function hideProgress() {
+        progressBar.parentElement.classList.add('d-none');
     }
 
     function showError(message) {
